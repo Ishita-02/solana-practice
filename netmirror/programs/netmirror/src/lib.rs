@@ -1,9 +1,11 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{prelude::*, solana_program::example_mocks::solana_sdk::system_program};
 
 declare_id!("32Fi4XBiBnYk2nwNVQ7hhrefPjCVAgcxV2LSB3dvh86t");
 
 #[program]
 pub mod netmirror {
+    use anchor_lang::system_program;
+
     use super::*;
 
     pub fn create_account(ctx: Context<CreateUser>) -> Result<()> {
@@ -20,15 +22,26 @@ pub mod netmirror {
         userAccount.is_subscribed = true;
         let current_time = Clock::get()?.unix_timestamp;
         userAccount.subscription_expiry = current_time + duration;
+
+        let cost = ctx.accounts.platform_state.subscription_price;
+        let cpi_contxt = CpiContext::new(ctx.accounts.system_program.to_account_info(), system_program::Transfer{
+            from: ctx.accounts.owner.to_account_info(),
+            to: ctx.accounts.treasury.to_account_info()
+        });
+        system_program::transfer(cpi_contxt, cost)?;
         Ok(())
     }
 
-    pub fn add_movie(ctx: Context<AddMovie>, title: String, description: String) -> Result<()> {
+    pub fn add_movie(ctx: Context<AddMovie>, title: String, description: String, video_url: String, genre: String) -> Result<()> {
         let movie = &mut ctx.accounts.movie;
         movie.title = title;
         movie.description = description;
         movie.added_by = ctx.accounts.admin.key();
         movie.total_views = 0;
+        movie.genre = genre;
+        movie.video_url = video_url;
+        movie.rating_count = 0;
+        movie.rating_sum = 0;
         movie.bump = ctx.bumps.movie;
         Ok(())
     }
@@ -52,6 +65,15 @@ pub mod netmirror {
     pub fn delete_movie(ctx: Context<DeleteMovie>) -> Result<()> {
         Ok(())
     }
+
+    pub fn rate_movie(ctx: Context<RateMovie>, rating_count: u64) -> Result<()> {
+        let movie = &mut ctx.accounts.movie;
+        let review = &mut ctx.accounts.review;
+        movie.rating_count == 1;
+        movie.rating_sum += review.rating;
+        review.reviewer = ctx.accounts.user_account.key();
+        Ok(())
+    }
 }
 
 #[error_code]
@@ -72,9 +94,46 @@ pub struct UserAccount {
 pub struct Movie {
     pub title: String,
     pub description: String,
+    pub video_url: String,
+    pub genre: String,
     pub added_by: Pubkey,
     pub total_views: u64,
+    pub rating_sum: u64,
+    pub rating_count: u64,
     pub bump: u8 
+}
+
+#[account]
+pub struct PlatformState {
+    pub admin: Pubkey,
+    pub treasury: Pubkey,
+    pub subscription_price: u64,
+    pub bump: u8
+}
+
+#[account]
+pub struct Review {
+    pub reviewer: Pubkey,
+    pub movie: Pubkey,
+    pub rating: u64,
+    pub bump: u8
+}
+
+#[derive(Accounts)]
+pub struct InitializePlatform<'info> {
+    #[account(
+        init,
+        payer = admin,
+        space = 8+32+32+8+1,
+        seeds = [b"state"],
+        bump
+    )]
+    pub platform_state: Account<'info, PlatformState>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    pub treasury: AccountInfo<'info>,
+    pub system_program: Program<'info,System>,
 }
 
 #[derive(Accounts)]
@@ -102,13 +161,16 @@ pub struct Subscribe<'info> {
         bump
     )]
     pub user_account: Account<'info, UserAccount>,
+    pub platform_state: Account<'info, PlatformState>,
 
     #[account(mut)]
-    pub owner: Signer<'info>
+    pub owner: Signer<'info>,
+    pub treasury: AccountInfo<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-#[instruction(title: String, description: String)]
+#[instruction(title: String, description: String, video_url: String, genre: String)]
 pub struct AddMovie<'info> {
     #[account(
         init,
@@ -118,7 +180,6 @@ pub struct AddMovie<'info> {
         bump
     )]
     pub movie: Account<'info, Movie>,
-
     #[account(mut)]
     pub admin: Signer<'info>,
     pub system_program: Program<'info, System>
@@ -169,4 +230,30 @@ pub struct DeleteMovie<'info> {
     )]
     pub movie: Account<'info, Movie>,
     pub added_by: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RateMovie<'info> {
+    #[account(mut)]
+    pub movie: Account<'info, Movie>,
+
+    #[account(
+        seeds = [b"user", owner.key().as_ref()],
+        bump
+    )]
+
+    pub user_account: Account<'info, UserAccount>,
+
+    #[account(
+        init, 
+        payer = owner,
+        space = 8 + 32 + 32 + 1 + 1,
+        seeds = [b"review", movie.key().as_ref(), owner.key().as_ref()],
+        bump
+    )]
+    pub review: Account<'info, Review>,
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>
 }
