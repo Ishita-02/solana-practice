@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 declare_id!("g6u4N2d2vwrihSzUGDFYWA12sNNiHFZF7eXy9i3VX5v");
 
 #[program]
-pub mod escrow {
+pub mod my_escrow_project {
     use super::*;
 
     pub fn initialize_escrow(ctx: Context<InitializeEscrow>, amount: u64, item_details: String) -> Result<()> {
