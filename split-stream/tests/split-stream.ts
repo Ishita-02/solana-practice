@@ -20,6 +20,7 @@ describe("split-stream", () => {
   let nftMint: PublicKey;
 
   let royaltySplitPda: PublicKey;
+  let newRoyaltySplitPda: PublicKey;
   let bump: number;
 
   before(async() => {
@@ -103,8 +104,79 @@ describe("split-stream", () => {
     console.log("Deposited 1 SOL successfully");
   });
 
+  it("Prevents unauthorized recipient from claiming", async() => {
+    try {
+      await program.methods
+      .claimShare(new anchor.BN(0))
+      .accountsPartial({
+        royaltySplit: royaltySplitPda,
+        recipient: recipeint2.publicKey
+      })
+      .signers([recipeint2])
+      .rpc();
+
+      assert.fail("Should have failed");
+    } catch(err) {
+        assert.include(err.toString(), "UnauthorizedRecipient");
+      }
+  });
+
+  it("Rejects split with percentge != 100", async() => {
+    const newNftMint = Keypair.generate().publicKey;
+    [newRoyaltySplitPda, bump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("royalty_split"), newNftMint.toBuffer()],
+      program.programId
+    );
+    const badRecipients = [
+      {wallet: recipeint1.publicKey, percentage: 60},
+      {wallet: recipeint2.publicKey, percentage: 30}
+    ];
+
+    try {
+      const tx = await program.methods
+      .initializeSplit(newNftMint, badRecipients)
+      .accountsPartial({
+        royaltySplit: newRoyaltySplitPda,
+        creator: creator.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([creator])
+      .rpc();
+      assert.fail("Should have failed");
+    } catch(err) {
+      assert.include(err.toString(), "SumExceed100Error");
+    }
+  });
+
+  it("Handles multiple deposits before claiming", async() => {
+    await program.methods
+      .depositRoyalty(new anchor.BN(0.5 * LAMPORTS_PER_SOL))
+      .accountsPartial({
+        royaltySplit: royaltySplitPda,
+        depositor: depositor.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([depositor])
+      .rpc();
+    
+    await program.methods
+      .depositRoyalty(new anchor.BN(0.5 * LAMPORTS_PER_SOL))
+      .accountsPartial({
+        royaltySplit: royaltySplitPda,
+        depositor: depositor.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([depositor])
+      .rpc();
+
+    const account = await program.account.royaltySplit.fetch(royaltySplitPda);
+    assert.equal(account.totalCollected.toNumber(), 2 * LAMPORTS_PER_SOL);
+    
+    console.log("Multiple deposits tracked correctly!");
+  });
+
   it("Recipeint 1 claims their 60% share", async() => {
-    const totalDeposited = 1 * LAMPORTS_PER_SOL;
+    const totalDeposited = 2 * LAMPORTS_PER_SOL;
     const expectedShare = (totalDeposited * 60) /100;
 
     const balanceBefore = await provider.connection.getBalance(recipeint1.publicKey);
@@ -130,7 +202,7 @@ describe("split-stream", () => {
   });
 
   it("Recipeint 2 claims their 40% share", async() => {
-    const totalDeposited = 1 * LAMPORTS_PER_SOL;
+    const totalDeposited = 2 * LAMPORTS_PER_SOL;
     const expectedShare = (totalDeposited * 40) /100;
 
     const balanceBefore = await provider.connection.getBalance(recipeint2.publicKey);
